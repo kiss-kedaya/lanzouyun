@@ -1,278 +1,122 @@
-import requests
+from curl_cffi import requests
 import re
 import sys
 import os
 import subprocess
 from tkinter import messagebox
+from urllib.parse import quote
 
 
-def get_lzy_file():
-    # 要检测的节点列表
-    # 找到最佳节点
-    best_node = "kedaya798.lanzoui.com"
-    url = f"https://{best_node}/b0w85nacb"
-    headers = {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
-        "Cache-Control": "max-age=0",
-        "Connection": "keep-alive",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Upgrade-Insecure-Requests": "1",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0",
-        "sec-ch-ua": '"Microsoft Edge";v="129", "Not=A?Brand";v="8", "Chromium";v="129"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-    }
-    cookies = {"codelen": "1"}
-    response = requests.get(
-        url,
-        cookies=cookies,
-        headers=headers,
-        impersonate="chrome",
-    )
-    if response.status_code != 200:
-        response = messagebox.askyesno(
-            "更新提示",
-            "获取更新失败，请检查网络连接！\n点击 [确认] 重试\n点击 [取消] 关闭更新",
+def get_lanzou_download_link(folder_url, password, file_to_find):
+    """
+    This function is a Python translation of the logic in lzy.e.
+    It gets a direct download link for a file in a Lanzou folder.
+    """
+    try:
+        # Part 1: Get file list
+        base_url_match = re.search(r"https://([^/]+)", folder_url)
+        if not base_url_match:
+            raise ValueError(f"无法从 '{folder_url}' 中提取基础 URL")
+        base_url = base_url_match.group(1)
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 Edg/132.0.0.0",
+            "Referer": f"https://{base_url}/",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+        }
+
+        r = requests.get(
+            folder_url, headers=headers, impersonate="chrome", allow_redirects=True
         )
-        if response:
-            return get_lzy_file()
+        r.raise_for_status()
+        page_text = r.text
+
+        t_var = re.search(r"'t':\s*(\w+)", page_text).group(1)
+        t_val = re.search(rf"var {t_var}\s*=\s*'(\d+)'", page_text).group(1)
+        k_var = re.search(r"'k':\s*(\w+)", page_text).group(1)
+        k_val = re.search(rf"var {k_var}\s*=\s*'([a-f0-9]+)'", page_text).group(1)
+        fid = re.search(r"'fid':\s*(\d+)", page_text).group(1)
+        uid = re.search(r"'uid':\s*'(\d+)'", page_text).group(1)
+        lx = re.search(r"'lx':\s*(\d+)", page_text).group(1)
+        up = re.search(r"'up':\s*(\d+)", page_text).group(1)
+        rep = re.search(r"'rep':\s*'(\d+)'", page_text).group(1)
+        pg = re.search(r"pgs\s*=\s*(\d+);", page_text).group(1)
+        ls = re.search(r"'ls':\s*(\d+)", page_text).group(1)
+
+        post_data = f"lx={lx}&fid={fid}&uid={uid}&pg={pg}&rep={rep}&t={t_val}&k={k_val}&up={up}&ls={ls}&pwd={password}"
+
+        ajax_url = f"https://{base_url}/filemoreajax.php?file={fid}"
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+
+        r = requests.post(
+            ajax_url, data=post_data, headers=headers, impersonate="chrome"
+        )
+        r.raise_for_status()
+        file_list = r.json()
+
+        # Part 2: Find file and get its page
+        file_id = None
+        for file_info in file_list.get("text", []):
+            print(file_info.get("name_all"))
+            if file_info.get("name_all") == file_to_find:
+                file_id = file_info.get("id")
+                break
+
+        if not file_id:
+            raise ValueError(f"文件 '{file_to_find}' 在文件夹中未找到。")
+
+        # Part 3: Get download link
+        file_page_url = f"https://{base_url}/{file_id}"
+        r = requests.get(
+            file_page_url, headers=headers, impersonate="chrome", allow_redirects=True
+        )
+        r.raise_for_status()
+        page_text = r.text
+
+        fn_path = re.search(r'src="/(fn\?[^"]+)"', page_text).group(1)
+
+        fn_url = f"https://{base_url}/{fn_path}"
+        r = requests.get(
+            fn_url, headers=headers, impersonate="chrome", allow_redirects=True
+        )
+        r.raise_for_status()
+        page_text = r.text
+
+        file_id_final = re.search(r"file='(\d+)'", page_text).group(1)
+        action_val = re.search(r"'action':'([^']+)'", page_text).group(1)
+
+        signs_var = re.search(r"'signs':\s*(\w+)", page_text).group(1)
+        signs_val = re.search(rf"var {signs_var}\s*=\s*'([\w\d]+)'", page_text).group(1)
+
+        sign_var = re.search(r"'sign':\s*(\w+)", page_text).group(1)
+        sign_val = re.search(rf"var {sign_var}\s*=\s*'([\w\d\.]*)'", page_text).group(1)
+
+        websign_val = re.search(r"'websign':'([^']+)'", page_text).group(1)
+        websignkey_var = re.search(r"'websignkey':\s*(\w+)", page_text).group(1)
+        websignkey_val = re.search(
+            rf"var {websignkey_var}\s*=\s*'([\w\d]+)'", page_text
+        ).group(1)
+
+        final_post_data = f"action={action_val}&signs={quote(signs_val)}&sign={sign_val}&websign={websign_val}&websignkey={websignkey_val}&ves=1&kd=1"
+
+        ajaxm_url = f"https://{base_url}/ajaxm.php?file={file_id_final}"
+
+        r = requests.post(
+            ajaxm_url, data=final_post_data, headers=headers, impersonate="chrome"
+        )
+        r.raise_for_status()
+
+        download_info = r.json()
+
+        if download_info.get("url"):
+            return f"{download_info['dom']}/file/{download_info['url']}"
         else:
-            print("Update canceled.")
-            return os.path.basename(sys.argv[0]), ""
-    response_text = response.text
-    match = re.search(r"'fid':(\d+)", response_text)
-    if match:
-        fid_value = match.group(1)
-    match = re.search(r"'uid':'(\d+)'", response_text)
-    if match:
-        uid_value = match.group(1)
-    match = re.search(r"'t':(\w+)", response_text)
-    if match:
-        t_value = match.group(1)
-        print(t_value)  # 输出 iay4nb
-    match = re.search(r"'k':(\w+)", response_text)
-    if match:
-        k_value = match.group(1)
-        print(k_value)  # 输出 iay4nb
-    t_match = re.search(rf"var {t_value}\s*=\s*'(\d+)'", response_text)
-    if t_match:
-        t_value = t_match.group(1)
-        print(t_value)
-    k_match = re.search(rf"var {k_value}\s*=\s*'([a-f0-9]+)'", response_text)
-    if k_match:
-        k_value = k_match.group(1)
-        print(k_value)
-    cookies = {
-        "codelen": "1",
-    }
-    headers = {
-        "Accept": "application/json, text/javascript, */*",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
-        "Connection": "keep-alive",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": f"https://{best_node}",
-        "Referer": f"https://{best_node}/b0w85nacb",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0",
-        "X-Requested-With": "XMLHttpRequest",
-        "sec-ch-ua": '"Microsoft Edge";v="129", "Not=A?Brand";v="8", "Chromium";v="129"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-    }
-    params = {
-        "file": fid_value,
-    }
+            raise ValueError(f"获取下载链接失败: {download_info.get('info')}")
 
-    data = {
-        "lx": "2",
-        "fid": fid_value,
-        "uid": uid_value,
-        "pg": "1",
-        "rep": "0",
-        "t": t_value,
-        "k": k_value,
-        "up": "1",
-        "ls": "1",
-        "pwd": "kedaya",
-    }
-    print(data)
-    response = requests.post(
-        f"https://{best_node}/filemoreajax.php",
-        params=params,
-        cookies=cookies,
-        headers=headers,
-        data=data,
-    )
-    if response.status_code != 200:
-        response = messagebox.askyesno(
-            "更新提示",
-            "获取更新失败，请检查网络连接！\n点击 [确认] 重试\n点击 [取消] 关闭更新",
-        )
-        if response:
-            return get_lzy_file()
-        else:
-            print("Update canceled.")
-            return os.path.basename(sys.argv[0]), ""
-    response_json = response.json()
-    print(response_json)
-    text = response_json["text"]
-    最新文件 = text[0]
-    url = f"https://{best_node}/{最新文件['id']}"
-    print(url)
-    return 最新文件["name_all"], url
-
-
-def lzy_download_url(url, passwd):
-    # 提取基础 URL
-    match = re.match(r"(https://[^/]+)", url)
-    if match:
-        base_url = match.group(1)
-    else:
-        raise ValueError("未找到基础 URL")
-    # 设置 cookies 和 headers
-    cookies = {
-        "codelen": "1",
-        "pc_ad1": "1",
-    }
-
-    headers = {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
-        "Cache-Control": "max-age=0",
-        "Connection": "keep-alive",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Upgrade-Insecure-Requests": "1",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0",
-        "sec-ch-ua": '"Microsoft Edge";v="129", "Not=A?Brand";v="8", "Chromium";v="129"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-    }
-
-    response = requests.get(
-        url=url,
-        cookies=cookies,
-        headers=headers,
-        impersonate="chrome",
-    )
-    response_text = response.text
-    # 正则表达式模式
-    pattern = r"<title>(.*?) -"
-
-    # 查找匹配
-    match = re.search(pattern, response_text)
-
-    if match:
-        title = match.group(1)
-        print("Title:", title)
-    else:
-        print("未找到")
-    # 正则表达式模式
-    pattern = r'src="/fn\?([^"]+)"'
-    # 查找匹配
-    match = re.search(pattern, response_text)
-    if match:
-        result = match.group(1)
-        print("result", result)
-
-    response = requests.get(
-        url=f"https://kedaya798.lanzoui.com/fn?{result}",
-        cookies=cookies,
-        headers=headers,
-        impersonate="chrome",
-    )
-    response_text = response.text
-
-    # 正则表达式模式
-    pattern = r"'(action|signs|sign|websign|websignkey|kd)':\s*([^,\s}]+)"
-    results = {}
-    for field in ["action", "signs", "sign", "websign", "websignkey", "kd"]:
-        match = re.search(rf"'{field}':\s*([^,\s}}]+)", response_text)
-        if match:
-            results[field] = match.group(1).strip().strip("'")
-    for key in results:
-        print(f"{key}:", results[key])
-        match = re.search(rf"var\s+{results[key]}\s*=\s*'([^']+)';", response_text)
-        if match:
-            results[key] = match.group(1)
-            print(f"{key}:", results[key])
-        else:
-            print("未找到")
-    if not results:
-        raise ValueError("未找到")
-
-    pattern = r"file=(\d+)"
-    match = re.search(pattern, response_text)
-    if match:
-        file_id = match.group(1)
-        print(file_id)
-
-    # 设置新的 headers 和 params
-    headers = {
-        "Accept": "application/json, text/javascript, */*",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
-        "Connection": "keep-alive",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": base_url,
-        "Referer": url,
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0",
-        "X-Requested-With": "XMLHttpRequest",
-        "sec-ch-ua": '"Microsoft Edge";v="129", "Not=A?Brand";v="8", "Chromium";v="129"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-    }
-
-    params = {
-        "file": file_id,
-    }
-
-    data = f'action={results["action"]}&signs={results["signs"]}&sign={results["sign"]}&websign={results["websign"]}&websignkey={results["websignkey"]}&ves=1&kd=1'
-
-    response = requests.post(
-        url=f"{base_url}/ajaxm.php",
-        params=params,
-        cookies=cookies,
-        headers=headers,
-        data=data,
-    )
-
-    response_json = response.json()
-
-    if not os.path.exists(f"./{title}"):
-        request_file_data = requests.get(
-            url=f'{response_json["dom"]}/file/{response_json["url"]}',
-            headers=headers,
-            impersonate="chrome",
-        )
-        file_data = request_file_data.content
-        with open(f"./{title}", "wb", encoding="utf-8") as save_file:
-            # 保存文件数据
-            save_file.write(file_data)
-            save_file.close()
-        # subprocess.Popen(title, creationflags=subprocess.CREATE_NEW_CONSOLE)
-        response = messagebox.askyesno(
-            "更新提示", "更新完毕\n即将删除旧版本 即将打开新版本"
-        )
-        if response:
-            create_bat_file(title)
-        return
-    else:
-        response = messagebox.askyesno("更新提示", f"新版本你好像下有了 {title}")
-        # subprocess.Popen(title, creationflags=subprocess.CREATE_NEW_CONSOLE)
-        if response:
-            create_bat_file(title)
-        return
+    except Exception as e:
+        messagebox.showerror("错误", f"处理失败: {e}")
+        return None
 
 
 def create_bat_file(title):
@@ -305,3 +149,26 @@ if exist "{exe_file_path}" (
 
     # 确保当前程序退出
     sys.exit()
+
+
+if __name__ == "__main__":
+    # 这是一个示例用法，请根据您的需求修改
+    FOLDER_URL = "https://kedaya798.lanzouu.com/b0w8fxfwb"
+    PASSWORD = "kedaya"
+    FILE_TO_FIND = "lzy.dll"  # 您要查找的文件名
+
+    print(f"正在从文件夹 '{FOLDER_URL}' 中查找文件 '{FILE_TO_FIND}'...")
+    download_link = get_lanzou_download_link(FOLDER_URL, PASSWORD, FILE_TO_FIND)
+
+    if download_link:
+        print(f"成功获取下载链接: {download_link}")
+
+        # 如果需要，可以在此处添加下载文件的逻辑
+        # print("正在下载文件...")
+        # file_content = requests.get(download_link).content
+        # with open(FILE_TO_FIND, "wb") as f:
+        #     f.write(file_content)
+        # print("下载完成！")
+
+    else:
+        print("获取下载链接失败。")
